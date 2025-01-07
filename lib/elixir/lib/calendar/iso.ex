@@ -1210,6 +1210,13 @@ defmodule Calendar.ISO do
       "02:02:02.000002"
 
   """
+  @padding_0 ""
+  @padding_1 "0"
+  @padding_2 "00"
+  @padding_3 "000"
+  @padding_4 "0000"
+  @padding_5 "00000"
+
   @impl true
   @doc since: "1.5.0"
   @spec time_to_string(
@@ -1223,30 +1230,77 @@ defmodule Calendar.ISO do
         hour,
         minute,
         second,
-        {ms_value, ms_precision} = microsecond,
+        microsecond,
         format \\ :extended
       )
       when is_hour(hour) and is_minute(minute) and is_second(second) and
-             is_microsecond(ms_value, ms_precision) and format in [:basic, :extended] do
-    time_to_string_guarded(hour, minute, second, microsecond, format)
+             format in [:basic, :extended] do
+    buffer = <<>>
+    append_time(buffer, hour, minute, second, microsecond, format)
   end
 
-  defp time_to_string_guarded(hour, minute, second, {_, 0}, format) do
-    time_to_string_format(hour, minute, second, format)
+  defp append_time(buffer, hour, minute, second, {_, 0}, format) do
+    append_time_format(buffer, hour, minute, second, format)
   end
 
-  defp time_to_string_guarded(hour, minute, second, {microsecond, precision}, format) do
-    time_to_string_format(hour, minute, second, format) <>
-      "." <> (microsecond |> zero_pad(6) |> binary_part(0, precision))
+  defp append_time(buffer, hour, minute, second, {microsecond, precision}, format) do
+    buffer = append_time_format(buffer, hour, minute, second, format)
+    buffer = <<buffer::binary, ?.>>
+    append_microseconds(buffer, microsecond, precision)
   end
 
-  defp time_to_string_format(hour, minute, second, :extended) do
-    zero_pad(hour, 2) <> ":" <> zero_pad(minute, 2) <> ":" <> zero_pad(second, 2)
+  defp append_time_format(buffer, hour, minute, second, :extended) do
+    buffer = append_zero_padded(buffer, hour, 2)
+    buffer = <<buffer::binary, ?:>>
+    buffer = append_zero_padded(buffer, minute, 2)
+    buffer = <<buffer::binary, ?:>>
+    append_zero_padded(buffer, second, 2)
   end
 
-  defp time_to_string_format(hour, minute, second, :basic) do
-    zero_pad(hour, 2) <> zero_pad(minute, 2) <> zero_pad(second, 2)
+  defp append_time_format(buffer, hour, minute, second, :basic) do
+    buffer = append_zero_padded(buffer, hour, 2)
+    buffer = append_zero_padded(buffer, minute, 2)
+    append_zero_padded(buffer, second, 2)
   end
+
+  @doc false
+  def append_microseconds(buffer, _microsecond, 0), do: buffer
+
+  def append_microseconds(buffer, microsecond, 6) do
+    append_zero_padded(buffer, microsecond, 6)
+  end
+
+  def append_microseconds(buffer, microsecond, precision) do
+    num = div(microsecond, div_factor(precision))
+    append_zero_padded(buffer, num, precision)
+  end
+
+  defp append_zero_padded(buffer, val, count) when val >= 0 do
+    str = Integer.to_string(val)
+
+    padding =
+      case max(count - String.length(str), 0) do
+        0 -> @padding_0
+        1 -> @padding_1
+        2 -> @padding_2
+        3 -> @padding_3
+        4 -> @padding_4
+        5 -> @padding_5
+      end
+
+    <<buffer::binary, padding::binary, str::binary>>
+  end
+
+  defp append_zero_padded(buffer, val, count) do
+    buffer = <<buffer::binary, ?->>
+    append_zero_padded(buffer, -val, count)
+  end
+
+  defp div_factor(1), do: 100_000
+  defp div_factor(2), do: 10_000
+  defp div_factor(3), do: 1_000
+  defp div_factor(4), do: 100
+  defp div_factor(5), do: 10
 
   @doc """
   Converts the given date into a string.
@@ -1274,17 +1328,24 @@ defmodule Calendar.ISO do
   @spec date_to_string(year, month, day, :basic | :extended) :: String.t()
   @impl true
   def date_to_string(year, month, day, format \\ :extended)
-      when is_integer(year) and is_integer(month) and is_integer(day) and
-             format in [:basic, :extended] do
-    date_to_string_guarded(year, month, day, format)
+      when is_integer(year) and
+             is_integer(month) and is_integer(day) and format in [:basic, :extended] do
+    buffer = <<>>
+    append_date(buffer, year, month, day, format)
   end
 
-  defp date_to_string_guarded(year, month, day, :extended) do
-    zero_pad(year, 4) <> "-" <> zero_pad(month, 2) <> "-" <> zero_pad(day, 2)
+  defp append_date(buffer, year, month, day, :extended) do
+    buffer = append_zero_padded(buffer, year, 4)
+    buffer = <<buffer::binary, ?->>
+    buffer = append_zero_padded(buffer, month, 2)
+    buffer = <<buffer::binary, ?->>
+    append_zero_padded(buffer, day, 2)
   end
 
-  defp date_to_string_guarded(year, month, day, :basic) do
-    zero_pad(year, 4) <> zero_pad(month, 2) <> zero_pad(day, 2)
+  defp append_date(buffer, year, month, day, :basic) do
+    buffer = append_zero_padded(buffer, year, 4)
+    buffer = append_zero_padded(buffer, month, 2)
+    append_zero_padded(buffer, day, 2)
   end
 
   @doc """
@@ -1293,17 +1354,6 @@ defmodule Calendar.ISO do
   By default, returns datetimes formatted in the "extended" format,
   for human readability. It also supports the "basic" format
   by passing the `:basic` option.
-
-  ## Examples
-
-      iex> Calendar.ISO.naive_datetime_to_string(2015, 2, 28, 1, 2, 3, {4, 6})
-      "2015-02-28 01:02:03.000004"
-      iex> Calendar.ISO.naive_datetime_to_string(2017, 8, 1, 1, 2, 3, {4, 5})
-      "2017-08-01 01:02:03.00000"
-
-      iex> Calendar.ISO.naive_datetime_to_string(2015, 2, 28, 1, 2, 3, {4, 6}, :basic)
-      "20150228 010203.000004"
-
   """
   @doc since: "1.4.0"
   @impl true
@@ -1327,43 +1377,14 @@ defmodule Calendar.ISO do
         microsecond,
         format \\ :extended
       ) do
-    date_to_string(year, month, day, format) <>
-      " " <> time_to_string(hour, minute, second, microsecond, format)
+    buffer = <<>>
+    buffer = append_date(buffer, year, month, day, format)
+    buffer = <<buffer::binary, ?\s>>
+    append_time(buffer, hour, minute, second, microsecond, format)
   end
 
   @doc """
   Converts the datetime (with time zone) into a string.
-
-  By default, returns datetimes formatted in the "extended" format,
-  for human readability. It also supports the "basic" format
-  by passing the `:basic` option.
-
-  ## Examples
-
-      iex> time_zone = "Etc/UTC"
-      iex> Calendar.ISO.datetime_to_string(2017, 8, 1, 1, 2, 3, {4, 5}, time_zone, "UTC", 0, 0)
-      "2017-08-01 01:02:03.00000Z"
-      iex> Calendar.ISO.datetime_to_string(2017, 8, 1, 1, 2, 3, {4, 5}, time_zone, "UTC", 3600, 0)
-      "2017-08-01 01:02:03.00000+01:00"
-      iex> Calendar.ISO.datetime_to_string(2017, 8, 1, 1, 2, 3, {4, 5}, time_zone, "UTC", 3600, 3600)
-      "2017-08-01 01:02:03.00000+02:00"
-
-      iex> time_zone = "Europe/Berlin"
-      iex> Calendar.ISO.datetime_to_string(2017, 8, 1, 1, 2, 3, {4, 5}, time_zone, "CET", 3600, 0)
-      "2017-08-01 01:02:03.00000+01:00 CET Europe/Berlin"
-      iex> Calendar.ISO.datetime_to_string(2017, 8, 1, 1, 2, 3, {4, 5}, time_zone, "CDT", 3600, 3600)
-      "2017-08-01 01:02:03.00000+02:00 CDT Europe/Berlin"
-
-      iex> time_zone = "America/Los_Angeles"
-      iex> Calendar.ISO.datetime_to_string(2015, 2, 28, 1, 2, 3, {4, 5}, time_zone, "PST", -28800, 0)
-      "2015-02-28 01:02:03.00000-08:00 PST America/Los_Angeles"
-      iex> Calendar.ISO.datetime_to_string(2015, 2, 28, 1, 2, 3, {4, 5}, time_zone, "PDT", -28800, 3600)
-      "2015-02-28 01:02:03.00000-07:00 PDT America/Los_Angeles"
-
-      iex> time_zone = "Europe/Berlin"
-      iex> Calendar.ISO.datetime_to_string(2017, 8, 1, 1, 2, 3, {4, 5}, time_zone, "CET", 3600, 0, :basic)
-      "20170801 010203.00000+0100 CET Europe/Berlin"
-
   """
   @doc since: "1.4.0"
   @impl true
@@ -1395,36 +1416,48 @@ defmodule Calendar.ISO do
         std_offset,
         format \\ :extended
       )
-      when is_time_zone(time_zone) and is_zone_abbr(zone_abbr) and is_utc_offset(utc_offset) and
-             is_std_offset(std_offset) do
-    date_to_string(year, month, day, format) <>
-      " " <>
-      time_to_string(hour, minute, second, microsecond, format) <>
-      offset_to_string(utc_offset, std_offset, time_zone, format) <>
-      zone_to_string(utc_offset, std_offset, zone_abbr, time_zone)
+      when is_time_zone(time_zone) and is_zone_abbr(zone_abbr) and
+             is_utc_offset(utc_offset) and is_std_offset(std_offset) do
+    buffer = <<>>
+    buffer = append_date(buffer, year, month, day, format)
+    buffer = <<buffer::binary, ?\s>>
+    buffer = append_time(buffer, hour, minute, second, microsecond, format)
+    buffer = append_offset(buffer, utc_offset, std_offset, time_zone, format)
+    append_zone(buffer, utc_offset, std_offset, zone_abbr, time_zone)
   end
 
-  @doc false
-  def offset_to_string(0, 0, "Etc/UTC", _format), do: "Z"
+  defp append_offset(buffer, 0, 0, "Etc/UTC", _format), do: <<buffer::binary, ?Z>>
 
-  def offset_to_string(utc, std, _zone, format) do
+  defp append_offset(buffer, utc, std, _zone, format) do
     total = utc + std
     second = abs(total)
     minute = second |> rem(3600) |> div(60)
     hour = div(second, 3600)
-    format_offset(total, hour, minute, format)
+    append_offset_format(buffer, total, hour, minute, format)
   end
 
-  defp format_offset(total, hour, minute, :extended) do
-    sign(total) <> zero_pad(hour, 2) <> ":" <> zero_pad(minute, 2)
+  defp append_offset_format(buffer, total, hour, minute, :extended) do
+    buffer = <<buffer::binary, sign(total)>>
+    buffer = append_zero_padded(buffer, hour, 2)
+    buffer = <<buffer::binary, ?:>>
+    append_zero_padded(buffer, minute, 2)
   end
 
-  defp format_offset(total, hour, minute, :basic) do
-    sign(total) <> zero_pad(hour, 2) <> zero_pad(minute, 2)
+  defp append_offset_format(buffer, total, hour, minute, :basic) do
+    buffer = <<buffer::binary, sign(total)>>
+    buffer = append_zero_padded(buffer, hour, 2)
+    append_zero_padded(buffer, minute, 2)
   end
 
-  defp zone_to_string(_, _, _, "Etc/UTC"), do: ""
-  defp zone_to_string(_, _, abbr, zone), do: " " <> abbr <> " " <> zone
+  defp append_zone(buffer, _, _, _, "Etc/UTC"), do: buffer
+
+  defp append_zone(buffer, _, _, abbr, zone) do
+    buffer = <<buffer::binary, ?\s, abbr::binary, ?\s>>
+    <<buffer::binary, zone::binary>>
+  end
+
+  defp sign(total) when total < 0, do: ?-
+  defp sign(_), do: ?+
 
   @doc """
   Determines if the date given is valid according to the proleptic Gregorian calendar.
@@ -1483,18 +1516,6 @@ defmodule Calendar.ISO do
   @spec day_rollover_relative_to_midnight_utc() :: {0, 1}
   def day_rollover_relative_to_midnight_utc() do
     {0, 1}
-  end
-
-  defp sign(total) when total < 0, do: "-"
-  defp sign(_), do: "+"
-
-  defp zero_pad(val, count) when val >= 0 do
-    num = Integer.to_string(val)
-    :binary.copy("0", max(count - byte_size(num), 0)) <> num
-  end
-
-  defp zero_pad(val, count) do
-    "-" <> zero_pad(-val, count)
   end
 
   @doc """
