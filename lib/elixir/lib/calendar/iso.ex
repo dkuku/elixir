@@ -1426,6 +1426,10 @@ defmodule Calendar.ISO do
     append_zone(buffer, utc_offset, std_offset, zone_abbr, time_zone)
   end
 
+  def offset_to_string(utc, std, zone, format) do
+    append_offset("", utc, std, zone, format)
+  end
+
   defp append_offset(buffer, 0, 0, "Etc/UTC", _format), do: <<buffer::binary, ?Z>>
 
   defp append_offset(buffer, utc, std, _zone, format) do
