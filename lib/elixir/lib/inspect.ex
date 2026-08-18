@@ -288,15 +288,19 @@ defimpl Inspect, for: BitString do
   def inspect(term, opts) when is_binary(term) do
     %Inspect.Opts{binaries: bins, base: base, printable_limit: printable_limit} = opts
 
-    if bins == :as_strings or
-         (bins == :infer and String.printable?(term, printable_limit) and base == :decimal) do
-      inspected =
-        case Identifier.escape(term, ?", printable_limit) do
-          {escaped, ""} -> [?", escaped, ?"]
-          {escaped, _} -> [?", escaped, ?", " <> ..."]
+    if bins == :as_strings or (bins == :infer and base == :decimal) do
+      if printable_limit == :infinity or byte_size(term) <= printable_limit do
+        # Bytes that are neither escaped nor start an interpolation are printable
+        # and escape to themselves, so the scan below skips both the printability
+        # check and the escaping for as long as it can, handing over whatever is
+        # left to escape/3.
+        case unescaped_ascii(term) do
+          <<>> -> color_doc(<<?", term::binary, ?">>, :string, opts)
+          rest -> escape_binary(term, rest, bins, printable_limit, opts)
         end
-
-      color_doc(IO.iodata_to_binary(inspected), :string, opts)
+      else
+        escape_binary(term, term, bins, printable_limit, opts)
+      end
     else
       inspect_bitstring(term, opts)
     end
@@ -305,6 +309,38 @@ defimpl Inspect, for: BitString do
   def inspect(term, opts) do
     inspect_bitstring(term, opts)
   end
+
+  defp escape_binary(term, rest, bins, printable_limit, opts) do
+    skipped = byte_size(term) - byte_size(rest)
+    limit = if printable_limit == :infinity, do: :infinity, else: printable_limit - skipped
+
+    if bins == :as_strings or String.printable?(rest, limit) do
+      prefix = binary_part(term, 0, skipped)
+
+      inspected =
+        case Identifier.escape(rest, ?", limit) do
+          {escaped, ""} -> <<?", prefix::binary, escaped::binary, ?">>
+          {escaped, _} -> <<?", prefix::binary, escaped::binary, ?", " <> ...">>
+        end
+
+      color_doc(inspected, :string, opts)
+    else
+      inspect_bitstring(term, opts)
+    end
+  end
+
+  defguardp is_unescaped_ascii(byte)
+            when byte >= 0x20 and byte <= 0x7E and byte != ?" and byte != ?\\ and byte != ?#
+
+  defp unescaped_ascii(<<a, b, c, d, t::binary>>)
+       when is_unescaped_ascii(a) and is_unescaped_ascii(b) and is_unescaped_ascii(c) and
+              is_unescaped_ascii(d),
+       do: unescaped_ascii(t)
+
+  defp unescaped_ascii(<<h, t::binary>>) when is_unescaped_ascii(h), do: unescaped_ascii(t)
+  defp unescaped_ascii(<<?#, ?{, _::binary>> = rest), do: rest
+  defp unescaped_ascii(<<?#, t::binary>>), do: unescaped_ascii(t)
+  defp unescaped_ascii(rest), do: rest
 
   defp inspect_bitstring("", opts) do
     color_doc("<<>>", :binary, opts)
