@@ -4,6 +4,7 @@
 
 import Kernel, except: [inspect: 1]
 import Inspect.Algebra
+import Bitwise
 
 alias Code.Identifier
 
@@ -332,15 +333,68 @@ defimpl Inspect, for: BitString do
   defguardp is_unescaped_ascii(byte)
             when byte >= 0x20 and byte <= 0x7E and byte != ?" and byte != ?\\ and byte != ?#
 
-  defp unescaped_ascii(<<a, b, c, d, t::binary>>)
-       when is_unescaped_ascii(a) and is_unescaped_ascii(b) and is_unescaped_ascii(c) and
-              is_unescaped_ascii(d),
+  # SWAR (SIMD Within A Register): the bytes of one word are checked in a single
+  # guard. Base uses the same pattern for its base16/32/64 validators and
+  # documents it in detail there: the `0x80 - c` and `0x7F - c` range constants,
+  # the leading 0x80 gate, and why seven bytes is the widest word that still fits
+  # a BEAM small int.
+  @swar_bytes 7
+
+  # One lane per byte, so multiplying by a byte broadcasts it across the word.
+  @swar_lanes Enum.reduce(1..@swar_bytes, 0, fn _, acc -> bsl(acc, 8) + 1 end)
+  @swar_mask80 @swar_lanes * 0x80
+
+  # A byte escapes to itself when it is printable and not one of ?", ?# or ?\\,
+  # which leaves three ranges: ?\s up to ?", above ?# up to ?\\, and above ?\\ up
+  # to ?~.
+  @swar_ge_space @swar_lanes * (0x80 - ?\s)
+  @swar_ge_quote @swar_lanes * (0x80 - ?")
+  @swar_gt_hash @swar_lanes * (0x7F - ?#)
+  @swar_ge_backslash @swar_lanes * (0x80 - ?\\)
+  @swar_gt_backslash @swar_lanes * (0x7F - ?\\)
+  @swar_gt_tilde @swar_lanes * (0x7F - ?~)
+
+  # A byte that needs no escaping, to pad out a tail shorter than a word.
+  @swar_pad @swar_lanes * ?a
+
+  defguardp unescaped_ascii_word(w)
+            when band(w, @swar_mask80) == 0 and
+                   band(
+                     bor(
+                       bor(
+                         bxor(w + @swar_ge_space, w + @swar_ge_quote),
+                         bxor(w + @swar_gt_hash, w + @swar_ge_backslash)
+                       ),
+                       bxor(w + @swar_gt_backslash, w + @swar_gt_tilde)
+                     ),
+                     @swar_mask80
+                   ) == @swar_mask80
+
+  defp unescaped_ascii(<<w::size(@swar_bytes)-unit(8), t::binary>>)
+       when unescaped_ascii_word(w),
        do: unescaped_ascii(t)
 
-  defp unescaped_ascii(<<h, t::binary>>) when is_unescaped_ascii(h), do: unescaped_ascii(t)
-  defp unescaped_ascii(<<?#, ?{, _::binary>> = rest), do: rest
-  defp unescaped_ascii(<<?#, t::binary>>), do: unescaped_ascii(t)
-  defp unescaped_ascii(rest), do: rest
+  # A tail shorter than a word stays on the same guard: the lanes it leaves free
+  # take the padding, shifted up out of the lanes the tail itself occupies.
+  for bytes <- (@swar_bytes - 1)..1//-1 do
+    padding = @swar_pad |> bsr(bytes * 8) |> bsl(bytes * 8)
+
+    defp unescaped_ascii(<<w::size(unquote(bytes))-unit(8)>>)
+         when unescaped_ascii_word(bor(w, unquote(padding))),
+         do: <<>>
+  end
+
+  # A rejected word holds an offending byte within it, so the byte scan below
+  # walks at most that far. It is a separate function so the rejected word is not
+  # tested again one byte further along.
+  defp unescaped_ascii(rest), do: unescaped_ascii_byte(rest)
+
+  defp unescaped_ascii_byte(<<h, t::binary>>) when is_unescaped_ascii(h),
+    do: unescaped_ascii_byte(t)
+
+  defp unescaped_ascii_byte(<<?#, ?{, _::binary>> = rest), do: rest
+  defp unescaped_ascii_byte(<<?#, t::binary>>), do: unescaped_ascii(t)
+  defp unescaped_ascii_byte(rest), do: rest
 
   defp inspect_bitstring("", opts) do
     color_doc("<<>>", :binary, opts)
