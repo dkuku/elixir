@@ -131,6 +131,23 @@ defmodule Inspect.BitStringTest do
     assert inspect("\a\b\d\e\f\n\r\s\t\v") == "\"\\a\\b\\d\\e\\f\\n\\r \\t\\v\""
   end
 
+  test "hashes and interpolation" do
+    hash_brace = <<?#, ?{>>
+
+    # A hash only starts an escape when it is followed by a brace
+    assert inspect("#") == ~S("#")
+    assert inspect("##") == ~S("##")
+    assert inspect("a#b") == ~S("a#b")
+    assert inspect("ab#") == ~S("ab#")
+
+    assert inspect(hash_brace) == ~S("\#{")
+    assert inspect("a" <> hash_brace <> "x}") == ~S("a\#{x}")
+    assert inspect("ab" <> hash_brace) == ~S("ab\#{")
+
+    # A hash followed by an unprintable byte still falls back to a bitstring
+    assert inspect("#" <> <<0xFF>>) == "<<35, 255>>"
+  end
+
   test "UTF-8" do
     assert inspect(" ゆんゆん") == "\" ゆんゆん\""
     # BOM
@@ -181,6 +198,22 @@ defmodule Inspect.BitStringTest do
 
     # Non printable strings aren't affected by printable limit
     assert inspect(<<0, 1, 2, 3, 4>>, printable_limit: 3) == ~s(<<0, 1, 2, 3, 4>>)
+
+    # An escape counts as a single character towards the limit
+    hash_brace = <<?#, ?{>>
+    assert inspect(hash_brace <> "x}", printable_limit: 1) == ~S("\#{" <> ...)
+    assert inspect("a" <> hash_brace <> "x}", printable_limit: 2) == ~S("a\#{" <> ...)
+    assert inspect("ab" <> hash_brace <> "c}", printable_limit: 3) == ~S("ab\#{" <> ...)
+
+    # Strings longer than the limit are truncated at the limit
+    assert inspect(String.duplicate("a", 5000), printable_limit: 4) == ~s("aaaa" <> ...)
+
+    assert inspect(String.duplicate("a", 5000)) ==
+             ~s("#{String.duplicate("a", 4096)}" <> ...)
+
+    # An escape straddling the truncation point is not split in half
+    assert inspect(String.duplicate("a", 4095) <> hash_brace <> "x}") ==
+             ~s("#{String.duplicate("a", 4095)}) <> ~S(\#{" <> ...)
   end
 end
 
