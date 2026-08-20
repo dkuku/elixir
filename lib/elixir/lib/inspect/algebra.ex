@@ -1182,23 +1182,38 @@ defmodule Inspect.Algebra do
   #
   @typep mode :: :flat | :flat_no_break | :break | :break_no_flat
 
+  @typep entries ::
+           maybe_improper_list(
+             {integer(), mode(), t()} | :group_over,
+             {:tail, boolean(), entries} | []
+           )
+
   @spec fits?(
           width :: non_neg_integer() | :infinity,
           column :: non_neg_integer(),
           break? :: boolean(),
           entries
         ) :: boolean()
-        when entries:
-               maybe_improper_list(
-                 {integer(), mode(), t()} | :group_over,
-                 {:tail, boolean(), entries} | []
-               )
+
+  @spec fits?(
+          width :: non_neg_integer() | :infinity,
+          column :: non_neg_integer(),
+          break? :: boolean(),
+          indent :: integer(),
+          mode(),
+          t(),
+          entries
+        ) :: boolean()
 
   # We need at least a break to consider the document does not fit since a
   # large document without breaks has no option but fitting its current line.
   #
   # In case we have groups and the group fits, we need to consider the group
   # parent without the child breaks, hence {:tail, b?, t} below.
+  #
+  # The head entry is carried in registers instead of being boxed back into the
+  # entry list, so unwrapping a document costs no allocation at all and a cons
+  # allocates one entry instead of two.
   defp fits?(w, k, b?, _) when k > w and b?, do: false
   defp fits?(_, _, _, []), do: true
   defp fits?(w, k, _, {:tail, b?, t}), do: fits?(w, k, b?, t)
@@ -1211,68 +1226,74 @@ defmodule Inspect.Algebra do
   defp fits?(_w, _k, b?, [:group_over | _]),
     do: b?
 
+  defp fits?(w, k, b?, [{i, m, doc} | t]), do: fits?(w, k, b?, i, m, doc, t)
+
   ## Flat no break
 
-  defp fits?(w, k, b?, [{i, _, doc_fits(x, :disabled)} | t]),
-    do: fits?(w, k, b?, [{i, :flat_no_break, x} | t])
+  defp fits?(w, k, b?, i, _, doc_fits(x, :disabled), t),
+    do: fits?(w, k, b?, i, :flat_no_break, x, t)
 
-  defp fits?(w, k, b?, [{i, :flat_no_break, doc_fits(x, _)} | t]),
-    do: fits?(w, k, b?, [{i, :flat_no_break, x} | t])
+  defp fits?(w, k, b?, i, :flat_no_break, doc_fits(x, _), t),
+    do: fits?(w, k, b?, i, :flat_no_break, x, t)
 
-  defp fits?(w, k, b?, [{i, _, doc_group(x, :pessimistic)} | t]),
-    do: fits?(w, k, b?, [{i, :flat_no_break, x} | t])
+  defp fits?(w, k, b?, i, _, doc_group(x, :pessimistic), t),
+    do: fits?(w, k, b?, i, :flat_no_break, x, t)
 
-  defp fits?(w, k, b?, [{i, :flat_no_break, doc_group(x, _)} | t]),
-    do: fits?(w, k, b?, [{i, :flat_no_break, x} | t])
+  defp fits?(w, k, b?, i, :flat_no_break, doc_group(x, _), t),
+    do: fits?(w, k, b?, i, :flat_no_break, x, t)
 
   ## Breaks no flat
 
-  defp fits?(w, k, b?, [{i, _, doc_fits(x, :enabled)} | t]),
-    do: fits?(w, k, b?, [{i, :break_no_flat, x} | t])
+  defp fits?(w, k, b?, i, _, doc_fits(x, :enabled), t),
+    do: fits?(w, k, b?, i, :break_no_flat, x, t)
 
-  defp fits?(w, k, b?, [{i, _, doc_group(x, :optimistic)} | t]),
-    do: fits?(w, k, b?, [{i, :break_no_flat, x} | t])
+  defp fits?(w, k, b?, i, _, doc_group(x, :optimistic), t),
+    do: fits?(w, k, b?, i, :break_no_flat, x, t)
 
-  defp fits?(w, k, b?, [{i, :break_no_flat, doc_force(x)} | t]),
-    do: fits?(w, k, b?, [{i, :break_no_flat, x} | t])
+  defp fits?(w, k, b?, i, :break_no_flat, doc_force(x), t),
+    do: fits?(w, k, b?, i, :break_no_flat, x, t)
 
-  defp fits?(_, _, _, [{_, :break_no_flat, doc_break(_, _)} | _]), do: true
-  defp fits?(_, _, _, [{_, :break_no_flat, doc_line()} | _]), do: true
+  defp fits?(_, _, _, _, :break_no_flat, doc_break(_, _), _), do: true
+  defp fits?(_, _, _, _, :break_no_flat, doc_line(), _), do: true
 
   ## Breaks
 
-  defp fits?(_, _, _, [{_, :break, doc_break(_, _)} | _]), do: true
-  defp fits?(_, _, _, [{_, :break, doc_line()} | _]), do: true
+  defp fits?(_, _, _, _, :break, doc_break(_, _), _), do: true
+  defp fits?(_, _, _, _, :break, doc_line(), _), do: true
 
-  defp fits?(w, k, b?, [{i, :break, doc_group(x, _)} | t]),
-    do: fits?(w, k, b?, [{i, :flat, x} | {:tail, b?, t}])
+  defp fits?(w, k, b?, i, :break, doc_group(x, _), t),
+    do: fits?(w, k, b?, i, :flat, x, {:tail, b?, t})
 
   ## Catch all
 
-  defp fits?(w, _, _, [{i, _, doc_line()} | t]), do: fits?(w, i, false, t)
-  defp fits?(w, k, b?, [{_, _, doc_nil()} | t]), do: fits?(w, k, b?, t)
-  defp fits?(w, _, b?, [{i, _, doc_collapse(_)} | t]), do: fits?(w, i, b?, t)
-  defp fits?(w, k, b?, [{i, m, doc_color(x, _)} | t]), do: fits?(w, k, b?, [{i, m, x} | t])
-  defp fits?(w, k, b?, [{_, _, doc_string(_, l)} | t]), do: fits?(w, k + l, b?, t)
-  defp fits?(w, k, b?, [{_, _, s} | t]) when is_binary(s), do: fits?(w, k + byte_size(s), b?, t)
-  defp fits?(_, _, _, [{_, _, doc_force(_)} | _]), do: false
-  defp fits?(w, k, _, [{_, _, doc_break(s, _)} | t]), do: fits?(w, k + byte_size(s), true, t)
-  defp fits?(w, k, b?, [{i, m, doc_nest(x, _, :break)} | t]), do: fits?(w, k, b?, [{i, m, x} | t])
+  defp fits?(w, _, _, i, _, doc_line(), t), do: fits?(w, i, false, t)
+  defp fits?(w, k, b?, _, _, doc_nil(), t), do: fits?(w, k, b?, t)
+  defp fits?(w, _, b?, i, _, doc_collapse(_), t), do: fits?(w, i, b?, t)
+  defp fits?(w, k, b?, i, m, doc_color(x, _), t), do: fits?(w, k, b?, i, m, x, t)
+  defp fits?(w, k, b?, _, _, doc_string(_, l), t), do: fits?(w, k + l, b?, t)
 
-  defp fits?(w, k, b?, [{i, m, doc_nest(x, j, _)} | t]),
-    do: fits?(w, k, b?, [{apply_nesting(i, k, j), m, x} | t])
+  defp fits?(w, k, b?, _, _, s, t) when is_binary(s), do: fits?(w, k + byte_size(s), b?, t)
 
-  defp fits?(w, k, b?, [{i, m, doc_cons(x, y)} | t]),
-    do: fits?(w, k, b?, [{i, m, x}, {i, m, y} | t])
+  defp fits?(_, _, _, _, _, doc_force(_), _), do: false
 
-  defp fits?(w, k, b?, [{i, m, doc_group(x, _)} | t]),
-    do: fits?(w, k, b?, [{i, m, x} | {:tail, b?, t}])
+  defp fits?(w, k, _, _, _, doc_break(s, _), t), do: fits?(w, k + byte_size(s), true, t)
 
-  defp fits?(w, k, b?, [{i, m, doc_limit(x, :infinity)} | t]) when w != :infinity,
-    do: fits?(:infinity, k, b?, [{i, :flat, x}, {i, m, doc_limit(empty(), w)} | t])
+  defp fits?(w, k, b?, i, m, doc_nest(x, _, :break), t), do: fits?(w, k, b?, i, m, x, t)
 
-  defp fits?(_w, k, b?, [{i, m, doc_limit(x, w)} | t]),
-    do: fits?(w, k, b?, [{i, m, x} | t])
+  defp fits?(w, k, b?, i, m, doc_nest(x, j, _), t),
+    do: fits?(w, k, b?, apply_nesting(i, k, j), m, x, t)
+
+  defp fits?(w, k, b?, i, m, doc_cons(x, y), t),
+    do: fits?(w, k, b?, i, m, x, [{i, m, y} | t])
+
+  defp fits?(w, k, b?, i, m, doc_group(x, _), t),
+    do: fits?(w, k, b?, i, m, x, {:tail, b?, t})
+
+  defp fits?(w, k, b?, i, m, doc_limit(x, :infinity), t) when w != :infinity,
+    do: fits?(:infinity, k, b?, i, :flat, x, [{i, m, doc_limit(empty(), w)} | t])
+
+  defp fits?(_w, k, b?, i, m, doc_limit(x, w), t),
+    do: fits?(w, k, b?, i, m, x, t)
 
   @spec format(
           width :: non_neg_integer() | :infinity,
