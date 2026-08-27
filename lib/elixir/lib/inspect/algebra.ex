@@ -1307,7 +1307,7 @@ defmodule Inspect.Algebra do
     do: format(w, k, [{i, m, x} | t], acc)
 
   defp format(w, _, [{i, _, doc_collapse(max)} | t], acc),
-    do: [acc | collapse(List.wrap(format(w, i, t, <<>>)), max, 0, i)]
+    do: <<acc::binary, collapse(format(w, i, t, <<>>), max, i)::binary>>
 
   # Flex breaks are conditional to the document and the mode
   defp format(w, k, [{i, m, doc_break(s, :flex)} | t], acc) do
@@ -1373,20 +1373,43 @@ defmodule Inspect.Algebra do
     format(w, k, [{i, m, x} | t], acc)
   end
 
-  defp collapse(["\n" <> rest | t], max, count, i) do
-    collapse([strip_whitespace(rest) | t], max, count + 1, i)
+  defp collapse(binary, max, i) do
+    {count, skip, same_prefix?, last_spaces} = count_collapsible(binary, 0, 0, true)
+
+    cond do
+      same_prefix? and count <= max and last_spaces == i ->
+        binary
+
+      same_prefix? and count == max + 1 and last_spaces == i ->
+        <<?\n, rest::binary>> = binary
+        rest
+
+      true ->
+        <<_::binary-size(^skip), rest::binary>> = binary
+
+        <<:binary.copy(@newline, min(max, count))::binary, :binary.copy(" ", i)::binary,
+          rest::binary>>
+    end
   end
 
-  defp collapse(["" | t], max, count, i) do
-    collapse(t, max, count, i)
+  defp count_collapsible(<<?\n, rest::binary>>, count, skip, same_prefix?) do
+    {rest, skip, spaces} = skip_spaces(rest, skip + 1, 0)
+
+    case rest do
+      <<?\n, _::binary>> ->
+        count_collapsible(rest, count + 1, skip, same_prefix? and spaces == 0)
+
+      _ ->
+        {count + 1, skip, same_prefix?, spaces}
+    end
   end
 
-  defp collapse(t, max, count, i) do
-    [:binary.copy("\n", min(max, count)), :binary.copy(" ", i) | t]
-  end
+  defp count_collapsible(_rest, count, skip, same_prefix?), do: {count, skip, same_prefix?, 0}
 
-  defp strip_whitespace(" " <> rest), do: strip_whitespace(rest)
-  defp strip_whitespace(rest), do: rest
+  defp skip_spaces(<<?\s, rest::binary>>, skip, spaces),
+    do: skip_spaces(rest, skip + 1, spaces + 1)
+
+  defp skip_spaces(rest, skip, spaces), do: {rest, skip, spaces}
 
   defp apply_nesting(_, k, :cursor), do: k
   defp apply_nesting(_, _, :reset), do: 0
