@@ -262,7 +262,6 @@ defmodule Inspect.Algebra do
 
   @container_separator ","
   @tail_separator " |"
-  @newline "\n"
 
   # Functional interface to "doc" records
 
@@ -1286,7 +1285,7 @@ defmodule Inspect.Algebra do
     do: format(w, k, t, acc)
 
   defp format(w, _, [{i, _, doc_line()} | t], acc),
-    do: format(w, i, t, <<acc::binary, indent(i)::binary>>)
+    do: format(w, i, t, <<acc::binary, ?\n, spaces(i)::binary>>)
 
   defp format(w, k, [{i, m, doc_cons(x, y)} | t], acc),
     do: format(w, k, [{i, m, x}, {i, m, y} | t], acc)
@@ -1316,14 +1315,14 @@ defmodule Inspect.Algebra do
     if w == :infinity or m == :flat or fits?(w, k, true, t) do
       format(w, k, t, <<acc::binary, s::binary>>)
     else
-      format(w, i, t, <<acc::binary, indent(i)::binary>>)
+      format(w, i, t, <<acc::binary, ?\n, spaces(i)::binary>>)
     end
   end
 
   # Strict breaks are conditional to the mode
   defp format(w, k, [{i, mode, doc_break(s, :strict)} | t], acc) do
     if mode == :break do
-      format(w, i, t, <<acc::binary, indent(i)::binary>>)
+      format(w, i, t, <<acc::binary, ?\n, spaces(i)::binary>>)
     else
       format(w, k + byte_size(s), t, <<acc::binary, s::binary>>)
     end
@@ -1392,6 +1391,11 @@ defmodule Inspect.Algebra do
   defp apply_nesting(_, _, :reset), do: 0
   defp apply_nesting(i, _, j), do: i + j
 
-  defp indent(0), do: @newline
-  defp indent(i), do: @newline <> :binary.copy(" ", i)
+  for i <- 0..16 do
+    defp spaces(unquote(i)) do
+      unquote(:binary.copy(" ", i))
+    end
+  end
+
+  defp spaces(i), do: :binary.copy(" ", i)
 end
