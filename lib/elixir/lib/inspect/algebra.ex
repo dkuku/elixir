@@ -1210,10 +1210,6 @@ defmodule Inspect.Algebra do
   #
   # In case we have groups and the group fits, we need to consider the group
   # parent without the child breaks, hence {:tail, b?, t} below.
-  #
-  # The head entry is carried in registers instead of being boxed back into the
-  # entry list, so unwrapping a document costs no allocation at all and a cons
-  # allocates one entry instead of two.
   defp fits?(w, k, b?, _) when k > w and b?, do: false
   defp fits?(_, _, _, []), do: true
   defp fits?(w, k, _, {:tail, b?, t}), do: fits?(w, k, b?, t)
@@ -1271,13 +1267,9 @@ defmodule Inspect.Algebra do
   defp fits?(w, _, b?, i, _, doc_collapse(_), t), do: fits?(w, i, b?, t)
   defp fits?(w, k, b?, i, m, doc_color(x, _), t), do: fits?(w, k, b?, i, m, x, t)
   defp fits?(w, k, b?, _, _, doc_string(_, l), t), do: fits?(w, k + l, b?, t)
-
   defp fits?(w, k, b?, _, _, s, t) when is_binary(s), do: fits?(w, k + byte_size(s), b?, t)
-
   defp fits?(_, _, _, _, _, doc_force(_), _), do: false
-
   defp fits?(w, k, _, _, _, doc_break(s, _), t), do: fits?(w, k + byte_size(s), true, t)
-
   defp fits?(w, k, b?, i, m, doc_nest(x, _, :break), t), do: fits?(w, k, b?, i, m, x, t)
 
   defp fits?(w, k, b?, i, m, doc_nest(x, j, _), t),
@@ -1379,8 +1371,6 @@ defmodule Inspect.Algebra do
   end
 
   defp format(w, k, i, :flat, doc_group(x, :optimistic), t, acc) do
-    # b? is false, so the fits?/4 early return cannot trigger and the
-    # entry can be handed over unboxed.
     if w == :infinity or fits?(w, k, false, i, :flat, x, t) do
       format(w, k, i, :flat, x, [:group_over | t], acc)
     else
